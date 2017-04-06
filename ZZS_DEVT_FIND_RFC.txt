@@ -1,0 +1,235 @@
+REPORT zzs_devt_find_rfc MESSAGE-ID 00.
+*----------------------------------------------------------------------*
+* Created by NM to Search RFCs calls
+*----------------------------------------------------------------------*
+
+*----------------------------------------------------------------------*
+* GLOBAL DATA
+*----------------------------------------------------------------------*
+TYPE-POOLS abap. "Only for old versions
+
+*----------------------------------------------------------- Variables *
+DATA gt_founds TYPE TABLE OF rsfindlst.                     "#EC NEEDED
+
+*----------------------------------------------------------------------*
+* CLASS gcl_handle_events DEFINITION
+*----------------------------------------------------------------------*
+CLASS gcl_handle_events DEFINITION FINAL.
+
+  PUBLIC SECTION.
+    METHODS on_double_click FOR EVENT double_click OF cl_salv_events_table
+      IMPORTING row column.                                 "#EC NEEDED
+
+ENDCLASS.                    "lcl_handle_events DEFINITION
+
+*----------------------------------------------------------------------*
+* SELECTION SCREEN
+*----------------------------------------------------------------------*
+*------------------------------------------------- RFC Function Module *
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE text-b01.
+SELECTION-SCREEN SKIP 1.
+PARAMETERS p_rfc TYPE rs38l_fnam OBLIGATORY. "Name of Function Module
+SELECTION-SCREEN SKIP 1.
+SELECTION-SCREEN END OF BLOCK b01.
+
+*----------------------------------------------------------------------*
+* REPORT EVENTS
+*----------------------------------------------------------------------*
+START-OF-SELECTION.
+  PERFORM search_rfc.
+
+END-OF-SELECTION.
+  PERFORM display_results.
+
+*----------------------------------------------------------------------*
+* CLASS lcl_handle_events IMPLEMENTATION
+*----------------------------------------------------------------------*
+CLASS gcl_handle_events IMPLEMENTATION.
+
+*---------- Row dbclick ----------*
+  METHOD on_double_click.
+
+    DATA:
+      ls_founds  LIKE LINE OF gt_founds,  "Found object
+      lt_report  TYPE TABLE OF string,    "Report source code
+      lt_results TYPE match_result_tab,   "Match results
+      ls_results TYPE match_result.
+
+*---------- Get selected line  ----------*
+    READ TABLE gt_founds INTO ls_founds INDEX row.
+    IF sy-subrc IS INITIAL.
+
+*---------- Find position  ----------*
+      READ REPORT ls_founds-object INTO lt_report.
+      FIND p_rfc IN TABLE lt_report RESULTS lt_results.
+      READ TABLE lt_results INTO ls_results INDEX 1.
+
+*---------- Display objects ----------*
+      CALL FUNCTION 'RS_TOOL_ACCESS'           "#EC FB_RC "#EC CI_SUBRC
+        EXPORTING
+          operation           = 'SHOW'
+          object_name         = ls_founds-object
+          object_type         = 'PROG'
+          position            = ls_results-line
+        EXCEPTIONS
+          not_executed        = 1
+          invalid_object_type = 2
+          OTHERS              = 3.
+    ENDIF.
+
+  ENDMETHOD.                    "on_double_click
+
+ENDCLASS.                    "lcl_handle_events IMPLEMENTATION
+
+*----------------------------------------------------------------------*
+* FORMS
+*----------------------------------------------------------------------*
+
+*&---------------------------------------------------------------------*
+*&      Form  SEARCH_RFC
+*&---------------------------------------------------------------------*
+FORM search_rfc .
+
+  CONSTANTS lc_obj_type TYPE seu_obj VALUE 'FF'.
+
+  DATA:
+    lt_findstring TYPE TABLE OF rsfind,
+    ls_findstring LIKE LINE OF lt_findstring.
+
+  ls_findstring-object = p_rfc.
+  APPEND ls_findstring TO lt_findstring.
+
+  REFRESH gt_founds.
+  CALL FUNCTION 'RS_EU_CROSSREF'                            "#EC FB_RC
+    EXPORTING
+      i_find_obj_cls           = lc_obj_type
+      no_dialog                = abap_true
+    TABLES
+      i_findstrings            = lt_findstring
+      o_founds                 = gt_founds
+    EXCEPTIONS
+      not_executed             = 1
+      not_found                = 2
+      illegal_object           = 3
+      no_cross_for_this_object = 4
+      batch                    = 5
+      batchjob_error           = 6
+      wrong_type               = 7
+      object_not_exist         = 8
+      OTHERS                   = 9.
+
+  IF gt_founds IS INITIAL.
+    MESSAGE s398 WITH text-m01 space space space DISPLAY LIKE 'W'.  "Not found
+  ENDIF.
+
+ENDFORM.                    " SEARCH_RFC
+
+*&---------------------------------------------------------------------*
+*&      Form  DISPLAY_RESULTS
+*&---------------------------------------------------------------------*
+FORM display_results .
+
+  DATA:
+    lo_results       TYPE REF TO cl_salv_table,             "ALV
+    lr_functions     TYPE REF TO cl_salv_functions_list,    "ALV Functions
+    lr_events        TYPE REF TO cl_salv_events_table,      "ALV Events
+    lr_display       TYPE REF TO cl_salv_display_settings,  "ALV Output Appearance
+    lr_columns       TYPE REF TO cl_salv_columns_table,     "ALV Columns
+    lr_column        TYPE REF TO cl_salv_column_table,
+    lr_selections    TYPE REF TO cl_salv_selections,        "ALV Selections
+    lo_event_handler TYPE REF TO gcl_handle_events.         "ALV Events Handler
+
+  DATA:
+    lt_column_ref TYPE salv_t_column_ref, "Columns of ALV List
+    ls_column_ref TYPE salv_s_column_ref.
+
+  IF gt_founds IS NOT INITIAL.
+    TRY.
+*---------- Create ALV ----------*
+        cl_salv_table=>factory( IMPORTING r_salv_table = lo_results CHANGING t_table = gt_founds ).
+
+*---------- Set ALV selections ----------*
+        lr_selections = lo_results->get_selections( ).
+        lr_selections->set_selection_mode( if_salv_c_selection_mode=>single ).
+
+*---------- Set ALV Display and Title ----------*
+        lr_display = lo_results->get_display_settings( ).
+        lr_display->set_striped_pattern( if_salv_c_bool_sap=>true ).
+
+*---------- Set Functions ----------*
+        lr_functions = lo_results->get_functions( ).
+        lr_functions->set_export_localfile( ).
+        lr_functions->set_filter( ).
+        lr_functions->set_print( ).
+        lr_functions->set_sort_asc( ).
+        lr_functions->set_sort_desc( ).
+        lr_functions->set_find( ).
+        lr_functions->set_detail( ).
+
+*---------- Set ALV Columns ----------*
+        lr_columns = lo_results->get_columns( ).
+        lr_columns->set_key_fixation( ).
+        lr_columns->set_optimize( ).
+        lt_column_ref = lr_columns->get( ).
+
+        lr_columns->set_column_position( columnname = 'ENCL_OBJEC' position = 1 ).
+        lr_columns->set_column_position( columnname = 'TEXTLINE'   position = 4 ).
+
+        LOOP AT lt_column_ref INTO ls_column_ref. "Default format for all columns
+          lr_column ?= lr_columns->get_column( ls_column_ref-columnname ).
+          lr_column->set_f4( if_salv_c_bool_sap=>false ).
+          lr_column->set_alignment( if_salv_c_alignment=>left ).
+          lr_column->set_visible( if_salv_c_bool_sap=>false ).
+          lr_column->set_technical( if_salv_c_bool_sap=>true ).
+
+          IF ls_column_ref-columnname = 'ENCL_OBJEC' OR ls_column_ref-columnname = 'OBJECT' OR
+             ls_column_ref-columnname = 'PROGRAM'.
+
+            CASE ls_column_ref-columnname.
+              WHEN 'OBJECT'.  "Sub Object
+                lr_column->set_long_text( text-a03 ).
+                lr_column->set_medium_text( text-a03 ).
+                lr_column->set_short_text( text-a03 ).
+              WHEN 'PROGRAM'. "Rotine
+                lr_column->set_long_text( text-c04 ).
+                lr_column->set_medium_text( text-c04 ).
+                lr_column->set_short_text( text-c04 ).
+            ENDCASE.
+
+            lr_column->set_key( if_salv_c_bool_sap=>true ).
+            lr_column->set_visible( if_salv_c_bool_sap=>true ).
+            lr_column->set_technical( if_salv_c_bool_sap=>false ).
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'OBJECT_CLS'.
+            lr_column->set_key( if_salv_c_bool_sap=>true ).
+            lr_column->set_visible( if_salv_c_bool_sap=>true ).
+            lr_column->set_alignment( if_salv_c_alignment=>centered ).
+            lr_column->set_technical( if_salv_c_bool_sap=>false ).
+          ENDIF.
+
+          IF ls_column_ref-columnname = 'TEXTLINE'. "Description
+            lr_column->set_long_text( text-a01 ).
+            lr_column->set_medium_text( text-a01 ).
+            lr_column->set_short_text( text-a02 ).
+
+            lr_column->set_visible( if_salv_c_bool_sap=>true ).
+            lr_column->set_alignment( if_salv_c_alignment=>left ).
+            lr_column->set_technical( if_salv_c_bool_sap=>false ).
+          ENDIF.
+        ENDLOOP.
+
+*---------- Register ALV Events ----------*
+        lr_events = lo_results->get_event( ).
+        CREATE OBJECT lo_event_handler.
+        SET HANDLER lo_event_handler->on_double_click FOR lr_events.
+
+*---------- Display Objects ALV ----------*
+        lo_results->display( ).
+
+      CATCH cx_root.                                     "#EC CATCH_ALL
+        MESSAGE s398 WITH text-m02 space space space DISPLAY LIKE 'E'.  "Error displaying result
+    ENDTRY.
+  ENDIF.
+
+ENDFORM.                    " DISPLAY_RESULTS
